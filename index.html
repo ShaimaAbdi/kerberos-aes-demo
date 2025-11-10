@@ -1,0 +1,123 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AES + Kerberos Mock</title>
+<link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;500;600&display=swap" rel="stylesheet">
+<style>
+:root { --primary: #6c5ce7; --accent: #00cec9; --glass: rgba(255,255,255,0.08); }
+body { font-family:"Poppins",sans-serif; background:radial-gradient(circle at top,#1b1f2f,#090b12 70%); color:#fff; margin:0; padding:40px; }
+h1 { text-align:center; color:var(--accent); }
+.container { display:grid; grid-template-columns:1fr 1fr; gap:25px; max-width:1200px; margin:auto; }
+.glass-card { background: var(--glass); padding:25px; border-radius:18px; backdrop-filter:blur(18px); border:1px solid rgba(255,255,255,0.18); box-shadow:0 0 25px rgba(0,255,255,0.15); }
+textarea,input { width:100%; padding:5px; border-radius:12px; background:rgba(255,255,255,0.08); border:none; color:white; resize:none; margin-top:8px; font-family:"Poppins"; }
+.btn { padding:12px 22px; border-radius:12px; border:none; cursor:pointer; margin-right:6px; font-weight:600; transition:0.3s; background:var(--primary); color:white; }
+.btn:hover { background:var(--accent); transform:translateY(-2px); }
+.label { font-size:14px; margin-bottom:6px; font-weight:500; }
+.badge-valid { display:inline-block; background:#00b894; padding:7px 12px; border-radius:8px; font-size:12px; font-weight:600; margin-left:6px; }
+@media(max-width:768px){ .container{grid-template-columns:1fr;} }
+</style>
+</head>
+<body>
+
+<h1>AES Encryption + Kerberos Ticket</h1>
+
+<div class="container">
+
+    <!-- Ticket Panel -->
+    <div class="glass-card">
+        <div class="label">Username</div>
+        <input id="username" placeholder="Username" />
+        <div class="label">Password</div>
+        <input type="password" id="password" placeholder="Password" />
+        <br><br>
+        <button class="btn" onclick="requestTicket()">Request Ticket</button>
+        <p id="ticketStatus"></p>
+    </div>
+
+    <!-- AES Panel -->
+    <div class="glass-card">
+        <div class="label">Plain Text</div>
+        <textarea id="plaintext" rows="5"></textarea>
+        <br>
+        <button class="btn" onclick="encryptMessage()">Encrypt</button>
+        <button class="btn" onclick="decryptMessage()">Decrypt</button>
+        <div class="label" style="margin-top:18px;">Cipher Text (Base64)</div>
+        <textarea id="ciphertext" rows="5"></textarea>
+    </div>
+
+</div>
+
+<script>
+let sessionKey = null;
+
+async function requestTicket() {
+    const username = document.getElementById('username').value;
+    const password = document.getElementById('password').value;
+
+    const res = await fetch('http://localhost:3000/request-ticket', {
+        method:'POST',
+        headers:{ 'Content-Type':'application/json' },
+        body: JSON.stringify({ username, password })
+    });
+
+    const data = await res.json();
+    if (!data.success) return alert(data.message);
+
+    document.getElementById('ticketStatus').textContent = '✅ Ticket received! AES session key ready.';
+
+    // Decrypt session key
+    const ticketBytes = Uint8Array.from(atob(data.ticket), c => c.charCodeAt(0));
+    const iv = ticketBytes.slice(0,12);            // first 12 bytes = IV
+    const tag = ticketBytes.slice(12,28);          // next 16 bytes = GCM tag
+    const encrypted = ticketBytes.slice(28);       // rest = ciphertext
+
+    const pwKey = await crypto.subtle.importKey(
+        'raw', new TextEncoder().encode(password),
+        { name:'PBKDF2' }, false, ['deriveKey']
+    );
+
+    const derivedKey = await crypto.subtle.deriveKey(
+        { name:'PBKDF2', salt:new TextEncoder().encode('salt'), iterations:100000, hash:'SHA-256' },
+        pwKey, { name:'AES-GCM', length:256 }, false, ['decrypt']
+    );
+
+    // Combine encrypted + tag for Web Crypto API
+    const combined = new Uint8Array([...encrypted, ...tag]);
+
+    try {
+        const decrypted = await crypto.subtle.decrypt(
+            { name:'AES-GCM', iv },
+            derivedKey,
+            combined
+        );
+        sessionKey = new Uint8Array(decrypted);
+    } catch {
+        alert('❌ Failed to decrypt session key. Wrong password?');
+    }
+}
+
+async function encryptMessage() {
+    if (!sessionKey) return alert('Request ticket first!');
+    const plaintext = new TextEncoder().encode(document.getElementById('plaintext').value);
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await crypto.subtle.importKey('raw', sessionKey, { name:'AES-GCM' }, false, ['encrypt']);
+    const encrypted = await crypto.subtle.encrypt({ name:'AES-GCM', iv }, key, plaintext);
+    const combined = new Uint8Array([...iv, ...new Uint8Array(encrypted)]);
+    document.getElementById('ciphertext').value = btoa(String.fromCharCode(...combined));
+}
+
+async function decryptMessage() {
+    if (!sessionKey) return alert('Request ticket first!');
+    const cipherBase64 = document.getElementById('ciphertext').value;
+    const bytes = Uint8Array.from(atob(cipherBase64), c=>c.charCodeAt(0));
+    const iv = bytes.slice(0,12);
+    const encrypted = bytes.slice(12);
+    const key = await crypto.subtle.importKey('raw', sessionKey, { name:'AES-GCM' }, false, ['decrypt']);
+    const decrypted = await crypto.subtle.decrypt({ name:'AES-GCM', iv }, key, encrypted);
+    document.getElementById('plaintext').value = new TextDecoder().decode(decrypted);
+}
+</script>
+</body>
+</html>
