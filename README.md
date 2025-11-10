@@ -36,3 +36,9 @@ Request flow (simulated Kerberos behavior)
 | Backend     | Node.js + Express |
 | Encryption  | AES-256 (Web Crypto API) |
 | Styling     |HTML, CSS (Glass UI style) |
+
+
+## ⚠️ Disclaimer
+
+**This project is for educational purposes only.
+Do not use this code in production environments.**
